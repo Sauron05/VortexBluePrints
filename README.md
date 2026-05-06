@@ -48,14 +48,6 @@ VortexBlueprints is a blueprint marketplace plugin for Paper and Folia servers. 
 | `/vbp panel` | `vortexblueprints.admin` | Print the built-in web panel URL |
 | `/vbp probe protection [x] [y] [z]` | `vortexblueprints.admin` | Diagnose claim-hook results at a location |
 
-## Build
-
-```powershell
-./gradlew.bat build
-```
-
-The packaged jar is copied to `jar/VortexBlueprints-1.0.0.jar`.
-
 ## Wiki
 
 Full setup, configuration, API, and moderation documentation is published in the GitHub wiki:
