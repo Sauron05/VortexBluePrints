@@ -1,0 +1,79 @@
+# VortexBlueprints configuration
+# Support: https://discord.gg/Tya84XrgSF
+
+selection:
+  max-volume: 25000
+  wand-material: GOLDEN_AXE
+  store-air: false
+
+storage:
+  type: sqlite
+  sqlite:
+    file: marketplace.db
+  mysql:
+    host: 127.0.0.1
+    port: 3306
+    database: vortexblueprints
+    username: root
+    password: change-me
+
+marketplace:
+  min-price: 0.0
+  max-price: 1000000.0
+  default-royalty-percent: 90.0
+  max-royalty-percent: 100.0
+  default-license-type: single_use
+  default-category: other
+  default-build-style: animated
+  owners-build-free: true
+  block-self-royalty: true
+  milestone-revenue-thresholds: [1000, 5000, 15000]
+  exclusive-sale-lock: true
+
+originality:
+  exact-duplicates: block
+  similarity-threshold: 0.92
+  warn-threshold: 0.78
+  derived-threshold: 0.62
+  review-threshold: 0.78
+  partial-copy-threshold: 0.48
+  revision-lock-threshold: 0.84
+  allow-owner-updates: true
+
+building:
+  rotate-to-player-facing: true
+  blocks-per-tick: 450
+  preview-particles: true
+  preview-seconds: 8
+  preview-max-points: 750
+  showroom-hologram: true
+  material-readiness-mode: report
+  warn-on-collisions: true
+  warn-on-liquid: true
+  block-on-protection-deny: true
+
+economy:
+  prefer-vault: true
+  internal-starting-balance: 2500.0
+  currency-singular: credit
+  currency-plural: credits
+
+integrations:
+  protection:
+    worldguard: true
+    towny: true
+    lands: true
+    griefprevention: true
+    residence: true
+    plotsquared: true
+
+external:
+  discord:
+    webhook-url: ""
+    notify-reviews: true
+    notify-disputes: true
+    notify-milestones: true
+  web-panel:
+    enabled: true
+    port: 9876
+    token: change-me

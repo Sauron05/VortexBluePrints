@@ -1,0 +1,28 @@
+name: VortexBlueprints
+version: ${version}
+description: ${description}
+main: com.sauron.vortexblueprints.VortexBlueprintsPlugin
+api-version: "1.21"
+folia-supported: true
+load: POSTWORLD
+authors: [Sauron]
+website: https://discord.gg/Tya84XrgSF
+softdepend: [Vault, PlaceholderAPI]
+commands:
+  vortexblueprints:
+    description: Main VortexBlueprints command
+    aliases: [vbp, blueprints, blueprint, bp]
+    usage: /<command> help
+permissions:
+  vortexblueprints.use:
+    description: Use blueprint marketplace commands
+    default: true
+  vortexblueprints.create:
+    description: Save and publish blueprints
+    default: true
+  vortexblueprints.build:
+    description: Build marketplace blueprints
+    default: true
+  vortexblueprints.admin:
+    description: Administer VortexBlueprints
+    default: op
