@@ -4,6 +4,10 @@ VortexBlueprints is a blueprint marketplace plugin for Paper and Folia servers. 
 
 ## Highlights
 
+- Premium market landing row with featured drops, creator hall, bundle browser, storefront access, and wishlist hub
+- Creator storefronts with spotlighted listings, follower counts, curated collections, and social proof signals
+- Collection bundles so creators can package related blueprints into premium themed drops
+- Wishlists and followed creators so players can track upcoming builds and favorite sellers
 - Cuboid blueprint capture with a wand or `/vbp pos1` and `/vbp pos2`
 - SQLite or MySQL-backed marketplace storage
 - Originality classification with duplicate, suspicious, and derived-build handling
@@ -23,7 +27,7 @@ VortexBlueprints is a blueprint marketplace plugin for Paper and Folia servers. 
 
 ## Quick Start
 
-1. Drop `VortexBlueprints-1.0.0.jar` into `plugins/`.
+1. Drop `VortexBlueprints-1.1.0.jar` into `plugins/`.
 2. Start the server once.
 3. Edit `plugins/VortexBlueprints/config.yml`.
 4. Restart or run `/vbp reload`.
@@ -42,11 +46,23 @@ VortexBlueprints is a blueprint marketplace plugin for Paper and Folia servers. 
 | `/vbp info <id>` | `vortexblueprints.use` | Inspect a listing |
 | `/vbp analytics` | `vortexblueprints.use` | Open creator analytics |
 | `/vbp rate <id>` | `vortexblueprints.use` | Open the GUI rating flow for a purchased listing |
+| `/vbp storefront [creator]` | `vortexblueprints.use` | Open a creator storefront |
+| `/vbp storefront headline|bio|feature|pincollection` | `vortexblueprints.use` | Polish your storefront spotlight |
+| `/vbp collection gui|create|desc|add|remove|feature` | `vortexblueprints.use` | Curate blueprint bundles |
+| `/vbp wishlist [toggle <id>]` | `vortexblueprints.use` | Open or edit the wishlist hub |
 | `/vbp review gui` | `vortexblueprints.admin` | Open the review queue GUI |
 | `/vbp dispute gui` | `vortexblueprints.admin` | Open the dispute queue GUI |
 | `/vbp team gui <id>` | Owner or admin | Open the team ownership editor |
 | `/vbp panel` | `vortexblueprints.admin` | Print the built-in web panel URL |
 | `/vbp probe protection [x] [y] [z]` | `vortexblueprints.admin` | Diagnose claim-hook results at a location |
+
+## Build
+
+```powershell
+./gradlew.bat build
+```
+
+The packaged jar is copied to `jar/VortexBlueprints-1.1.0.jar`.
 
 ## Wiki
 

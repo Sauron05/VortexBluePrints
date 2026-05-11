@@ -1,20 +1,26 @@
 package com.sauron.vortexblueprints.command;
 
 import com.sauron.vortexblueprints.VortexBlueprintsPlugin;
+import com.sauron.vortexblueprints.gui.CollectionBrowserGui;
 import com.sauron.vortexblueprints.gui.CreatorAnalyticsGui;
+import com.sauron.vortexblueprints.gui.CreatorStorefrontGui;
 import com.sauron.vortexblueprints.gui.DisputeQueueGui;
 import com.sauron.vortexblueprints.gui.MarketplaceGui;
 import com.sauron.vortexblueprints.gui.RatingGui;
 import com.sauron.vortexblueprints.gui.ReviewQueueGui;
 import com.sauron.vortexblueprints.gui.TeamOwnershipGui;
+import com.sauron.vortexblueprints.gui.WishlistGui;
 import com.sauron.vortexblueprints.listener.SelectionListener;
 import com.sauron.vortexblueprints.model.BlueprintCategory;
+import com.sauron.vortexblueprints.model.BlueprintCollection;
 import com.sauron.vortexblueprints.model.BlueprintLicenseType;
 import com.sauron.vortexblueprints.model.BlueprintListing;
 import com.sauron.vortexblueprints.model.BuildStyle;
+import com.sauron.vortexblueprints.model.CreatorProfile;
 import com.sauron.vortexblueprints.model.DisputeRecord;
 import com.sauron.vortexblueprints.model.MarketView;
 import com.sauron.vortexblueprints.model.ReviewTicket;
+import com.sauron.vortexblueprints.model.SocialState;
 import com.sauron.vortexblueprints.util.ItemBuilder;
 import com.sauron.vortexblueprints.util.MessageUtil;
 import java.util.ArrayList;
@@ -36,7 +42,7 @@ public final class VortexBlueprintsCommand implements CommandExecutor, TabComple
 
     private static final Pattern ID_PATTERN = Pattern.compile("[a-z0-9_-]{3,32}");
     private static final List<String> ROOT_COMMANDS = List.of(
-        "help", "wand", "pos1", "pos2", "save", "market", "build", "preview", "info", "list", "analytics", "rate", "review", "dispute", "team", "curate", "panel", "probe", "delete", "balance", "credits", "reload"
+        "help", "wand", "pos1", "pos2", "save", "market", "build", "preview", "info", "list", "analytics", "rate", "storefront", "collection", "wishlist", "review", "dispute", "team", "curate", "panel", "probe", "delete", "balance", "credits", "reload"
     );
 
     private final VortexBlueprintsPlugin plugin;
@@ -64,6 +70,9 @@ public final class VortexBlueprintsCommand implements CommandExecutor, TabComple
             case "list" -> handleList(sender);
             case "analytics" -> handleAnalytics(sender, args);
             case "rate" -> handleRate(sender, args);
+            case "storefront" -> handleStorefront(sender, args);
+            case "collection" -> handleCollection(sender, args);
+            case "wishlist" -> handleWishlist(sender, args);
             case "review" -> handleReview(sender, args);
             case "dispute" -> handleDispute(sender, args);
             case "team" -> handleTeam(sender, args);
@@ -88,8 +97,37 @@ public final class VortexBlueprintsCommand implements CommandExecutor, TabComple
         if (args.length == 2 && List.of("build", "preview", "info", "delete", "rate", "curate").contains(subcommand)) {
             return filter(plugin.getDataManager().getBlueprints().stream().map(BlueprintListing::getId).toList(), args[1]);
         }
+        if (args.length == 2 && subcommand.equals("storefront")) {
+            List<String> storefrontOptions = new ArrayList<>(List.of("headline", "bio", "feature", "unfeature", "pincollection", "unpincollection"));
+            storefrontOptions.addAll(plugin.getDataManager().getCreatorProfiles().stream().map(CreatorProfile::getCreatorName).toList());
+            return filter(storefrontOptions, args[1]);
+        }
+        if (args.length == 3 && subcommand.equals("storefront") && List.of("feature", "unfeature").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return filter(plugin.getDataManager().getBlueprints().stream().map(BlueprintListing::getId).toList(), args[2]);
+        }
+        if (args.length == 3 && subcommand.equals("storefront") && List.of("pincollection", "unpincollection").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return filter(plugin.getDataManager().getCollectionsByOwner(sender instanceof Player player ? player.getUniqueId() : null).stream().map(BlueprintCollection::getId).toList(), args[2]);
+        }
         if (args.length == 2 && subcommand.equals("market")) {
             return filter(List.of("featured", "trending", "newest", "cheapest", "profitable", "creator_top"), args[1]);
+        }
+        if (args.length == 2 && subcommand.equals("collection")) {
+            return filter(List.of("gui", "list", "create", "desc", "add", "remove", "feature"), args[1]);
+        }
+        if (args.length == 3 && subcommand.equals("collection") && List.of("desc", "add", "remove", "feature").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return filter(plugin.getDataManager().getCollectionsByOwner(sender instanceof Player player ? player.getUniqueId() : null).stream().map(BlueprintCollection::getId).toList(), args[2]);
+        }
+        if (args.length == 4 && subcommand.equals("collection") && List.of("add", "remove").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return filter(plugin.getDataManager().getBlueprints().stream().map(BlueprintListing::getId).toList(), args[3]);
+        }
+        if (args.length == 4 && subcommand.equals("collection") && args[1].equalsIgnoreCase("feature")) {
+            return filter(List.of("true", "false"), args[3]);
+        }
+        if (args.length == 2 && subcommand.equals("wishlist")) {
+            return filter(List.of("gui", "toggle"), args[1]);
+        }
+        if (args.length == 3 && subcommand.equals("wishlist") && args[1].equalsIgnoreCase("toggle")) {
+            return filter(plugin.getDataManager().getBlueprints().stream().map(BlueprintListing::getId).toList(), args[2]);
         }
         if (args.length == 3 && subcommand.equals("market")) {
             return filter(List.of("house", "spawn", "farm", "pvp", "redstone", "shop", "dungeon", "medieval", "scifi", "decor", "other"), args[2]);
@@ -295,6 +333,10 @@ public final class VortexBlueprintsCommand implements CommandExecutor, TabComple
             "builds", String.valueOf(listing.getBuilds()),
             "score", MessageUtil.percent(listing.getOriginalityScore()),
             "status", listing.getStatus().name());
+        MessageUtil.send(sender, "<gray>Wishlists: <white><wishlists></white> <dark_gray>|</dark_gray> Followers: <white><followers></white> <dark_gray>|</dark_gray> Bundles: <white><bundles></white>",
+            "wishlists", String.valueOf(plugin.getDataManager().getWishlistCount(listing.getId())),
+            "followers", String.valueOf(plugin.getDataManager().getFollowerCount(listing.getOwnerId())),
+            "bundles", String.valueOf(plugin.getDataManager().getCollectionsContaining(listing.getId()).size()));
         MessageUtil.send(sender, "<gray>Team: <white><team></white> <dark_gray>|</dark_gray> Revision: <white><revision></white> <dark_gray>|</dark_gray> Provenance entries: <white><timeline></white>",
             "team", listing.getTeamKey().isBlank() ? "solo" : listing.getTeamKey(),
             "revision", String.valueOf(listing.getRevision()),
@@ -364,6 +406,251 @@ public final class VortexBlueprintsCommand implements CommandExecutor, TabComple
         MessageUtil.send(player, plugin.getConfigManager().message("rating-recorded"),
             "id", listing.getId(),
             "rating", MessageUtil.number(listing.getAverageRating()));
+    }
+
+    private void handleStorefront(CommandSender sender, String[] args) {
+        Player player = requirePlayer(sender);
+        if (player == null || !requirePermission(player, "vortexblueprints.use")) {
+            return;
+        }
+        CreatorProfile profile = plugin.getDataManager().getOrCreateCreatorProfile(player.getUniqueId(), player.getName());
+        if (args.length == 1) {
+            new CreatorStorefrontGui(plugin, player, player.getUniqueId(), 0, MarketView.TRENDING, null).open(player);
+            return;
+        }
+        String action = args[1].toLowerCase(Locale.ROOT);
+        switch (action) {
+            case "headline" -> {
+                if (args.length < 3) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp storefront headline <text...></white>");
+                    return;
+                }
+                profile.setHeadline(joinTail(args, 2));
+                plugin.getDataManager().saveCreatorProfileAsync(profile);
+                MessageUtil.send(player, "<prefix><green>Updated your storefront headline.");
+            }
+            case "bio" -> {
+                if (args.length < 3) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp storefront bio <text...></white>");
+                    return;
+                }
+                profile.setBio(joinTail(args, 2));
+                plugin.getDataManager().saveCreatorProfileAsync(profile);
+                MessageUtil.send(player, "<prefix><green>Updated your storefront bio.");
+            }
+            case "feature", "unfeature" -> {
+                if (args.length < 3) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp storefront " + action + " <blueprintId></white>");
+                    return;
+                }
+                BlueprintListing listing = plugin.getDataManager().getBlueprint(args[2]).orElse(null);
+                if (listing == null) {
+                    MessageUtil.send(player, plugin.getConfigManager().message("not-found"), "id", args[2]);
+                    return;
+                }
+                if (!listing.isOwner(player.getUniqueId()) && !player.hasPermission("vortexblueprints.admin")) {
+                    MessageUtil.send(player, plugin.getConfigManager().message("no-permission"));
+                    return;
+                }
+                boolean changed = action.equals("feature") ? profile.featureBlueprint(listing.getId()) : profile.unfeatureBlueprint(listing.getId());
+                if (!changed) {
+                    MessageUtil.send(player, "<prefix><yellow>No storefront change was needed for <white><id></white>.", "id", listing.getId());
+                    return;
+                }
+                plugin.getDataManager().saveCreatorProfileAsync(profile);
+                MessageUtil.send(player,
+                    action.equals("feature")
+                        ? "<prefix><green>Featured <white><id></white> on your storefront."
+                        : "<prefix><yellow>Removed <white><id></white> from your storefront spotlight.",
+                    "id", listing.getId());
+            }
+            case "pincollection", "unpincollection" -> {
+                if (args.length < 3) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp storefront " + action + " <collectionId></white>");
+                    return;
+                }
+                BlueprintCollection collection = plugin.getDataManager().getCollection(args[2]).orElse(null);
+                if (collection == null) {
+                    MessageUtil.send(player, "<prefix><red>Unknown collection <white><id></white>.", "id", args[2]);
+                    return;
+                }
+                if (!collection.getOwnerId().equals(player.getUniqueId()) && !player.hasPermission("vortexblueprints.admin")) {
+                    MessageUtil.send(player, plugin.getConfigManager().message("no-permission"));
+                    return;
+                }
+                boolean changed = action.equals("pincollection") ? profile.pinCollection(collection.getId()) : profile.unpinCollection(collection.getId());
+                if (!changed) {
+                    MessageUtil.send(player, "<prefix><yellow>No storefront change was needed for <white><id></white>.", "id", collection.getId());
+                    return;
+                }
+                plugin.getDataManager().saveCreatorProfileAsync(profile);
+                MessageUtil.send(player,
+                    action.equals("pincollection")
+                        ? "<prefix><green>Pinned <white><id></white> to your storefront."
+                        : "<prefix><yellow>Unpinned <white><id></white> from your storefront.",
+                    "id", collection.getId());
+            }
+            default -> {
+                CreatorProfile target = resolveCreatorProfile(action).orElse(null);
+                if (target == null) {
+                    MessageUtil.send(player, "<prefix><red>Unknown creator storefront or blueprint id: <white><input></white>.", "input", args[1]);
+                    return;
+                }
+                new CreatorStorefrontGui(plugin, player, target.getCreatorId(), 0, MarketView.TRENDING, null).open(player);
+            }
+        }
+    }
+
+    private void handleCollection(CommandSender sender, String[] args) {
+        Player player = requirePlayer(sender);
+        if (player == null || !requirePermission(player, "vortexblueprints.use")) {
+            return;
+        }
+        if (args.length == 1 || args[1].equalsIgnoreCase("gui")) {
+            if (args.length >= 3) {
+                CreatorProfile target = resolveCreatorProfile(args[2]).orElse(null);
+                if (target == null) {
+                    MessageUtil.send(player, "<prefix><red>Unknown creator <white><input></white>.", "input", args[2]);
+                    return;
+                }
+                new CollectionBrowserGui(plugin, player, 0, target.getCreatorId(), 0, MarketView.TRENDING, null).open(player);
+                return;
+            }
+            new CollectionBrowserGui(plugin, player, 0, null, 0, MarketView.TRENDING, null).open(player);
+            return;
+        }
+        String action = args[1].toLowerCase(Locale.ROOT);
+        switch (action) {
+            case "list" -> {
+                List<BlueprintCollection> ownedCollections = plugin.getDataManager().getCollectionsByOwner(player.getUniqueId());
+                if (ownedCollections.isEmpty()) {
+                    MessageUtil.send(player, "<prefix><yellow>You have not created any collections yet.");
+                    return;
+                }
+                MessageUtil.send(player, "<prefix><green>Your collections: <white><ids></white>",
+                    "ids", ownedCollections.stream().map(BlueprintCollection::getId).sorted().reduce((first, second) -> first + ", " + second).orElse("none"));
+            }
+            case "create" -> {
+                if (args.length < 4) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp collection create <id> <title...></white>");
+                    return;
+                }
+                Optional<String> idOptional = normalizeId(args[2]);
+                if (idOptional.isEmpty()) {
+                    MessageUtil.send(player, "<prefix><red>Collection ids must be 3-32 characters: lowercase letters, numbers, underscores, or hyphens.");
+                    return;
+                }
+                if (plugin.getDataManager().getCollection(idOptional.get()).isPresent()) {
+                    MessageUtil.send(player, "<prefix><red>A collection with that id already exists.");
+                    return;
+                }
+                BlueprintCollection collection = new BlueprintCollection(idOptional.get(), player.getUniqueId(), player.getName(), joinTail(args, 3), "", System.currentTimeMillis());
+                plugin.getDataManager().saveCollectionAsync(collection);
+                CreatorProfile creatorProfile = plugin.getDataManager().getOrCreateCreatorProfile(player.getUniqueId(), player.getName());
+                if (creatorProfile.getPinnedCollectionIds().isEmpty()) {
+                    creatorProfile.pinCollection(collection.getId());
+                    plugin.getDataManager().saveCreatorProfileAsync(creatorProfile);
+                }
+                MessageUtil.send(player, "<prefix><green>Created collection <white><id></white>.", "id", collection.getId());
+            }
+            case "desc" -> {
+                if (args.length < 4) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp collection desc <id> <description...></white>");
+                    return;
+                }
+                BlueprintCollection collection = plugin.getDataManager().getCollection(args[2]).orElse(null);
+                if (collection == null) {
+                    MessageUtil.send(player, "<prefix><red>Unknown collection <white><id></white>.", "id", args[2]);
+                    return;
+                }
+                if (!collection.getOwnerId().equals(player.getUniqueId()) && !player.hasPermission("vortexblueprints.admin")) {
+                    MessageUtil.send(player, plugin.getConfigManager().message("no-permission"));
+                    return;
+                }
+                collection.setDescription(joinTail(args, 3));
+                plugin.getDataManager().saveCollectionAsync(collection);
+                MessageUtil.send(player, "<prefix><green>Updated collection description for <white><id></white>.", "id", collection.getId());
+            }
+            case "add", "remove" -> {
+                if (args.length < 4) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp collection " + action + " <collectionId> <blueprintId></white>");
+                    return;
+                }
+                BlueprintCollection collection = plugin.getDataManager().getCollection(args[2]).orElse(null);
+                BlueprintListing listing = plugin.getDataManager().getBlueprint(args[3]).orElse(null);
+                if (collection == null || listing == null) {
+                    MessageUtil.send(player, "<prefix><red>Provide a valid collection id and blueprint id.");
+                    return;
+                }
+                if (!collection.getOwnerId().equals(player.getUniqueId()) && !player.hasPermission("vortexblueprints.admin")) {
+                    MessageUtil.send(player, plugin.getConfigManager().message("no-permission"));
+                    return;
+                }
+                if (!listing.isOwner(player.getUniqueId()) && !player.hasPermission("vortexblueprints.admin")) {
+                    MessageUtil.send(player, "<prefix><red>You can only curate blueprints you own.");
+                    return;
+                }
+                boolean changed = action.equals("add") ? collection.addBlueprint(listing.getId()) : collection.removeBlueprint(listing.getId());
+                if (!changed) {
+                    MessageUtil.send(player, "<prefix><yellow>No collection change was needed for <white><id></white>.", "id", listing.getId());
+                    return;
+                }
+                plugin.getDataManager().saveCollectionAsync(collection);
+                MessageUtil.send(player,
+                    action.equals("add")
+                        ? "<prefix><green>Added <white><blueprint></white> to <white><collection></white>."
+                        : "<prefix><yellow>Removed <white><blueprint></white> from <white><collection></white>.",
+                    "blueprint", listing.getId(),
+                    "collection", collection.getId());
+            }
+            case "feature" -> {
+                if (args.length < 4) {
+                    MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp collection feature <id> <true|false></white>");
+                    return;
+                }
+                BlueprintCollection collection = plugin.getDataManager().getCollection(args[2]).orElse(null);
+                if (collection == null) {
+                    MessageUtil.send(player, "<prefix><red>Unknown collection <white><id></white>.", "id", args[2]);
+                    return;
+                }
+                if (!collection.getOwnerId().equals(player.getUniqueId()) && !player.hasPermission("vortexblueprints.admin")) {
+                    MessageUtil.send(player, plugin.getConfigManager().message("no-permission"));
+                    return;
+                }
+                collection.setFeatured(Boolean.parseBoolean(args[3]));
+                plugin.getDataManager().saveCollectionAsync(collection);
+                MessageUtil.send(player, "<prefix><green>Updated collection spotlight for <white><id></white>.", "id", collection.getId());
+            }
+            default -> MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp collection gui|list|create|desc|add|remove|feature ...</white>");
+        }
+    }
+
+    private void handleWishlist(CommandSender sender, String[] args) {
+        Player player = requirePlayer(sender);
+        if (player == null || !requirePermission(player, "vortexblueprints.use")) {
+            return;
+        }
+        SocialState state = plugin.getDataManager().getOrCreateSocialState(player.getUniqueId(), player.getName());
+        if (args.length == 1 || args[1].equalsIgnoreCase("gui")) {
+            new WishlistGui(plugin, player, 0, 0, MarketView.TRENDING, null).open(player);
+            return;
+        }
+        if (!args[1].equalsIgnoreCase("toggle") || args.length < 3) {
+            MessageUtil.send(player, "<prefix><yellow>Usage: <white>/vbp wishlist</white> <gray>or</gray> <white>/vbp wishlist toggle <id></white>");
+            return;
+        }
+        BlueprintListing listing = plugin.getDataManager().getBlueprint(args[2]).orElse(null);
+        if (listing == null) {
+            MessageUtil.send(player, plugin.getConfigManager().message("not-found"), "id", args[2]);
+            return;
+        }
+        boolean added = state.toggleWishlist(listing.getId());
+        plugin.getDataManager().saveSocialStateAsync(state);
+        MessageUtil.send(player,
+            added
+                ? "<prefix><green>Saved <white><id></white> to your wishlist."
+                : "<prefix><yellow>Removed <white><id></white> from your wishlist.",
+            "id", listing.getId());
     }
 
     private void handleReview(CommandSender sender, String[] args) {
@@ -717,11 +1004,31 @@ public final class VortexBlueprintsCommand implements CommandExecutor, TabComple
         MessageUtil.send(sender, "<gray>/vbp preview <id></gray> <dark_gray>-</dark_gray> <white>Preview the footprint</white>");
         MessageUtil.send(sender, "<gray>/vbp analytics</gray> <dark_gray>-</dark_gray> <white>Open your creator analytics</white>");
         MessageUtil.send(sender, "<gray>/vbp rate <id></gray> <dark_gray>-</dark_gray> <white>Open the rating GUI for a purchased blueprint</white>");
+        MessageUtil.send(sender, "<gray>/vbp storefront [creator]</gray> <dark_gray>-</dark_gray> <white>Open a premium creator storefront</white>");
+        MessageUtil.send(sender, "<gray>/vbp storefront headline|bio|feature|pincollection</gray> <dark_gray>-</dark_gray> <white>Polish your creator page</white>");
+        MessageUtil.send(sender, "<gray>/vbp collection gui|create|desc|add|remove|feature</gray> <dark_gray>-</dark_gray> <white>Curate premium blueprint bundles</white>");
+        MessageUtil.send(sender, "<gray>/vbp wishlist [toggle <id>]</gray> <dark_gray>-</dark_gray> <white>Open or edit your wishlist hub</white>");
         MessageUtil.send(sender, "<gray>/vbp review gui|list|approve|reject</gray> <dark_gray>-</dark_gray> <white>Moderate originality review queue</white>");
         MessageUtil.send(sender, "<gray>/vbp dispute gui|open|resolve</gray> <dark_gray>-</dark_gray> <white>Manage originality disputes</white>");
         MessageUtil.send(sender, "<gray>/vbp team gui|add|remove|list</gray> <dark_gray>-</dark_gray> <white>Manage co-owner royalty splits</white>");
         MessageUtil.send(sender, "<gray>/vbp curate feature|staffpick</gray> <dark_gray>-</dark_gray> <white>Set marketplace curation flags</white>");
         MessageUtil.send(sender, "<gray>/vbp probe protection [x] [y] [z]</gray> <dark_gray>-</dark_gray> <white>Diagnose claim-hook results at a location</white>");
+    }
+
+    private Optional<CreatorProfile> resolveCreatorProfile(String input) {
+        Optional<CreatorProfile> byName = plugin.getDataManager().findCreatorProfileByName(input);
+        if (byName.isPresent()) {
+            return byName;
+        }
+        BlueprintListing listing = plugin.getDataManager().getBlueprint(input).orElse(null);
+        if (listing != null) {
+            return Optional.of(plugin.getDataManager().getOrCreateCreatorProfile(listing.getOwnerId(), listing.getOwnerName()));
+        }
+        Player online = Bukkit.getPlayerExact(input);
+        if (online != null) {
+            return Optional.of(plugin.getDataManager().getOrCreateCreatorProfile(online.getUniqueId(), online.getName()));
+        }
+        return Optional.empty();
     }
 
     private Player requirePlayer(CommandSender sender) {

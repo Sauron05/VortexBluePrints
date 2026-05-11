@@ -4,10 +4,12 @@ import com.sauron.vortexblueprints.VortexBlueprintsPlugin;
 import com.sauron.vortexblueprints.model.Account;
 import com.sauron.vortexblueprints.model.BlockEntry;
 import com.sauron.vortexblueprints.model.BlueprintCategory;
+import com.sauron.vortexblueprints.model.BlueprintCollection;
 import com.sauron.vortexblueprints.model.BlueprintLicenseType;
 import com.sauron.vortexblueprints.model.BlueprintListing;
 import com.sauron.vortexblueprints.model.BlueprintStatus;
 import com.sauron.vortexblueprints.model.BuildStyle;
+import com.sauron.vortexblueprints.model.CreatorProfile;
 import com.sauron.vortexblueprints.model.CreatorAnalytics;
 import com.sauron.vortexblueprints.model.CreatorBadge;
 import com.sauron.vortexblueprints.model.DisputeRecord;
@@ -18,6 +20,7 @@ import com.sauron.vortexblueprints.model.PurchaseRecord;
 import com.sauron.vortexblueprints.model.RatingSummary;
 import com.sauron.vortexblueprints.model.ReviewTicket;
 import com.sauron.vortexblueprints.model.RoyaltyTier;
+import com.sauron.vortexblueprints.model.SocialState;
 import com.sauron.vortexblueprints.model.TimelineEntry;
 import com.sauron.vortexblueprints.service.MarketQuery;
 import com.sauron.vortexblueprints.service.SearchIndexService;
@@ -52,9 +55,12 @@ public final class DataManager {
     private final VortexBlueprintsPlugin plugin;
     private final Map<String, BlueprintListing> blueprints = new ConcurrentHashMap<>();
     private final Map<UUID, Account> accounts = new ConcurrentHashMap<>();
+    private final Map<UUID, CreatorProfile> creatorProfiles = new ConcurrentHashMap<>();
+    private final Map<String, BlueprintCollection> collections = new ConcurrentHashMap<>();
     private final Map<String, PurchaseRecord> purchases = new ConcurrentHashMap<>();
     private final Map<String, DisputeRecord> disputes = new ConcurrentHashMap<>();
     private final Map<String, ReviewTicket> reviewTickets = new ConcurrentHashMap<>();
+    private final Map<UUID, SocialState> socialStates = new ConcurrentHashMap<>();
     private final List<LedgerEntry> ledgerEntries = java.util.Collections.synchronizedList(new ArrayList<>());
     private final SearchIndexService searchIndexService = new SearchIndexService();
     private final ExecutorService ioExecutor;
@@ -95,13 +101,34 @@ public final class DataManager {
 
     public void putBlueprint(BlueprintListing listing) {
         blueprints.put(normalizeId(listing.getId()), listing);
+        CreatorProfile profile = getOrCreateCreatorProfile(listing.getOwnerId(), listing.getOwnerName());
+        if (profile.getFeaturedBlueprintIds().isEmpty()) {
+            profile.featureBlueprint(listing.getId());
+            saveCreatorProfileAsync(profile);
+        }
         rebuildIndex();
         ioExecutor.execute(() -> saveBlueprintNow(listing));
     }
 
     public void deleteBlueprint(String id) {
         String normalizedId = normalizeId(id);
-        blueprints.remove(normalizedId);
+        BlueprintListing removed = blueprints.remove(normalizedId);
+        if (removed != null) {
+            CreatorProfile profile = creatorProfiles.get(removed.getOwnerId());
+            if (profile != null && profile.unfeatureBlueprint(normalizedId)) {
+                saveCreatorProfileAsync(profile);
+            }
+            for (BlueprintCollection collection : collections.values()) {
+                if (collection.removeBlueprint(normalizedId)) {
+                    saveCollectionAsync(collection);
+                }
+            }
+            for (SocialState state : socialStates.values()) {
+                if (state.removeFromWishlist(normalizedId)) {
+                    saveSocialStateAsync(state);
+                }
+            }
+        }
         rebuildIndex();
         ioExecutor.execute(() -> {
             try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement("DELETE FROM blueprints WHERE id = ?")) {
@@ -125,6 +152,171 @@ public final class DataManager {
 
     public Optional<Account> getAccount(UUID uuid) {
         return Optional.ofNullable(accounts.get(uuid));
+    }
+
+    public CreatorProfile getOrCreateCreatorProfile(UUID creatorId, String creatorName) {
+        return creatorProfiles.compute(creatorId, (ignoredUuid, existingProfile) -> {
+            if (existingProfile == null) {
+                return new CreatorProfile(creatorId, creatorName);
+            }
+            existingProfile.setCreatorName(creatorName);
+            return existingProfile;
+        });
+    }
+
+    public Optional<CreatorProfile> getCreatorProfile(UUID creatorId) {
+        return Optional.ofNullable(creatorProfiles.get(creatorId));
+    }
+
+    public List<CreatorProfile> getCreatorProfiles() {
+        for (BlueprintListing listing : blueprints.values()) {
+            creatorProfiles.computeIfAbsent(listing.getOwnerId(), ignoredUuid -> new CreatorProfile(listing.getOwnerId(), listing.getOwnerName()));
+        }
+        return creatorProfiles.values().stream()
+            .sorted(java.util.Comparator.comparingLong(CreatorProfile::getUpdatedAt).reversed())
+            .toList();
+    }
+
+    public Optional<CreatorProfile> findCreatorProfileByName(String creatorName) {
+        if (creatorName == null || creatorName.isBlank()) {
+            return Optional.empty();
+        }
+        Optional<CreatorProfile> existing = creatorProfiles.values().stream()
+            .filter(profile -> profile.getCreatorName().equalsIgnoreCase(creatorName))
+            .findFirst();
+        if (existing.isPresent()) {
+            return existing;
+        }
+        return blueprints.values().stream()
+            .filter(listing -> listing.getOwnerName().equalsIgnoreCase(creatorName))
+            .findFirst()
+            .map(listing -> getOrCreateCreatorProfile(listing.getOwnerId(), listing.getOwnerName()));
+    }
+
+    public List<BlueprintListing> getBlueprintsByOwner(UUID ownerId) {
+        return blueprints.values().stream()
+            .filter(listing -> listing.isOwner(ownerId))
+            .sorted(java.util.Comparator.comparingLong(BlueprintListing::getUpdatedAt).reversed())
+            .toList();
+    }
+
+    public void saveCreatorProfileAsync(CreatorProfile profile) {
+        creatorProfiles.put(profile.getCreatorId(), profile);
+        ioExecutor.execute(() -> saveCreatorProfileNow(profile));
+    }
+
+    public List<BlueprintCollection> getCollections() {
+        return collections.values().stream()
+            .sorted(java.util.Comparator.comparing(BlueprintCollection::isFeatured).reversed()
+                .thenComparingLong(BlueprintCollection::getUpdatedAt).reversed())
+            .toList();
+    }
+
+    public List<BlueprintCollection> getCollectionsByOwner(UUID ownerId) {
+        return collections.values().stream()
+            .filter(collection -> collection.getOwnerId().equals(ownerId))
+            .sorted(java.util.Comparator.comparingLong(BlueprintCollection::getUpdatedAt).reversed())
+            .toList();
+    }
+
+    public Optional<BlueprintCollection> getCollection(String id) {
+        return Optional.ofNullable(collections.get(normalizeId(id)));
+    }
+
+    public List<BlueprintCollection> getCollectionsContaining(String blueprintId) {
+        String normalizedId = normalizeId(blueprintId);
+        return collections.values().stream()
+            .filter(collection -> collection.getBlueprintIds().contains(normalizedId))
+            .sorted(java.util.Comparator.comparing(BlueprintCollection::isFeatured).reversed()
+                .thenComparingLong(BlueprintCollection::getUpdatedAt).reversed())
+            .toList();
+    }
+
+    public void saveCollectionAsync(BlueprintCollection collection) {
+        collections.put(normalizeId(collection.getId()), collection);
+        ioExecutor.execute(() -> saveCollectionNow(collection));
+    }
+
+    public void deleteCollection(String id) {
+        String normalizedId = normalizeId(id);
+        collections.remove(normalizedId);
+        for (CreatorProfile profile : creatorProfiles.values()) {
+            if (profile.unpinCollection(normalizedId)) {
+                saveCreatorProfileAsync(profile);
+            }
+        }
+        ioExecutor.execute(() -> {
+            try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement("DELETE FROM blueprint_collections WHERE id = ?")) {
+                statement.setString(1, normalizedId);
+                statement.executeUpdate();
+            } catch (SQLException exception) {
+                plugin.getLogger().warning("Failed to delete collection " + normalizedId + ": " + exception.getMessage());
+            }
+        });
+    }
+
+    public SocialState getOrCreateSocialState(UUID playerId, String playerName) {
+        return socialStates.compute(playerId, (ignoredUuid, existingState) -> {
+            if (existingState == null) {
+                return new SocialState(playerId, playerName);
+            }
+            existingState.setPlayerName(playerName);
+            return existingState;
+        });
+    }
+
+    public Optional<SocialState> getSocialState(UUID playerId) {
+        return Optional.ofNullable(socialStates.get(playerId));
+    }
+
+    public void saveSocialStateAsync(SocialState state) {
+        socialStates.put(state.getPlayerId(), state);
+        ioExecutor.execute(() -> saveSocialStateNow(state));
+    }
+
+    public boolean isWishlisted(UUID playerId, String blueprintId) {
+        SocialState state = socialStates.get(playerId);
+        return state != null && state.hasWishlisted(blueprintId);
+    }
+
+    public long getWishlistCount(String blueprintId) {
+        String normalizedId = normalizeId(blueprintId);
+        return socialStates.values().stream().filter(state -> state.hasWishlisted(normalizedId)).count();
+    }
+
+    public List<BlueprintListing> getWishlistListings(UUID playerId) {
+        SocialState state = socialStates.get(playerId);
+        if (state == null) {
+            return List.of();
+        }
+        return state.getWishlistBlueprintIds().stream()
+            .map(this::getBlueprint)
+            .flatMap(Optional::stream)
+            .filter(listing -> listing.getStatus() == BlueprintStatus.LIVE)
+            .sorted(java.util.Comparator.comparingDouble(BlueprintListing::getAverageRating).reversed()
+                .thenComparingLong(BlueprintListing::getBuilds).reversed())
+            .toList();
+    }
+
+    public boolean isFollowing(UUID playerId, UUID creatorId) {
+        SocialState state = socialStates.get(playerId);
+        return state != null && state.isFollowing(creatorId);
+    }
+
+    public long getFollowerCount(UUID creatorId) {
+        return socialStates.values().stream().filter(state -> state.isFollowing(creatorId)).count();
+    }
+
+    public List<CreatorProfile> getFollowedCreatorProfiles(UUID playerId) {
+        SocialState state = socialStates.get(playerId);
+        if (state == null) {
+            return List.of();
+        }
+        return state.getFollowedCreators().stream()
+            .map(creatorProfiles::get)
+            .filter(java.util.Objects::nonNull)
+            .sorted(java.util.Comparator.comparingLong(CreatorProfile::getUpdatedAt).reversed())
+            .toList();
     }
 
     public Optional<PurchaseRecord> getPurchase(String blueprintId, UUID buyerId) {
@@ -211,6 +403,12 @@ public final class DataManager {
             saveBlueprintNow(listing);
         }
         saveAccountsNow();
+        for (CreatorProfile profile : creatorProfiles.values()) {
+            saveCreatorProfileNow(profile);
+        }
+        for (BlueprintCollection collection : collections.values()) {
+            saveCollectionNow(collection);
+        }
         for (PurchaseRecord purchaseRecord : purchases.values()) {
             savePurchaseNow(purchaseRecord);
         }
@@ -219,6 +417,9 @@ public final class DataManager {
         }
         for (ReviewTicket ticket : reviewTickets.values()) {
             saveReviewTicketNow(ticket);
+        }
+        for (SocialState state : socialStates.values()) {
+            saveSocialStateNow(state);
         }
         synchronized (ledgerEntries) {
             for (LedgerEntry ledgerEntry : ledgerEntries) {
@@ -289,9 +490,12 @@ public final class DataManager {
         try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS blueprints (id TEXT PRIMARY KEY, owner_uuid TEXT NOT NULL, owner_name TEXT NOT NULL, status TEXT NOT NULL, category TEXT NOT NULL, price DOUBLE NOT NULL, featured INTEGER NOT NULL, staff_pick INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, views BIGINT NOT NULL, purchases BIGINT NOT NULL, builds BIGINT NOT NULL, total_revenue DOUBLE NOT NULL, total_royalties DOUBLE NOT NULL, payload TEXT NOT NULL)");
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS accounts (uuid TEXT PRIMARY KEY, name TEXT NOT NULL, balance DOUBLE NOT NULL, earned DOUBLE NOT NULL, spent DOUBLE NOT NULL, purchases BIGINT NOT NULL, builds BIGINT NOT NULL, sales BIGINT NOT NULL, reputation DOUBLE NOT NULL, last_seen BIGINT NOT NULL)");
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS creator_profiles (creator_uuid TEXT PRIMARY KEY, creator_name TEXT NOT NULL, updated_at BIGINT NOT NULL, payload TEXT NOT NULL)");
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS blueprint_collections (id TEXT PRIMARY KEY, owner_uuid TEXT NOT NULL, owner_name TEXT NOT NULL, featured INTEGER NOT NULL, updated_at BIGINT NOT NULL, payload TEXT NOT NULL)");
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS purchases (purchase_key TEXT PRIMARY KEY, blueprint_id TEXT NOT NULL, buyer_uuid TEXT NOT NULL, buyer_name TEXT NOT NULL, license_type TEXT NOT NULL, uses_remaining INTEGER NOT NULL, total_purchases INTEGER NOT NULL, total_builds INTEGER NOT NULL, prepaid_value DOUBLE NOT NULL, first_purchased_at BIGINT NOT NULL, last_purchase_at BIGINT NOT NULL, last_build_at BIGINT NOT NULL)");
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS disputes (id TEXT PRIMARY KEY, blueprint_id TEXT NOT NULL, against_blueprint_id TEXT NOT NULL, reporter_uuid TEXT NOT NULL, reporter_name TEXT NOT NULL, evidence TEXT NOT NULL, notes TEXT NOT NULL, status TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)");
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS review_tickets (id TEXT PRIMARY KEY, blueprint_id TEXT NOT NULL, creator_uuid TEXT NOT NULL, creator_name TEXT NOT NULL, reason TEXT NOT NULL, classification TEXT NOT NULL, similarity DOUBLE NOT NULL, moderator_notes TEXT NOT NULL, status TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)");
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS social_states (player_uuid TEXT PRIMARY KEY, player_name TEXT NOT NULL, updated_at BIGINT NOT NULL, payload TEXT NOT NULL)");
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS ledger (id BIGINT PRIMARY KEY, created_at BIGINT NOT NULL, type TEXT NOT NULL, blueprint_id TEXT NOT NULL, actor_uuid TEXT NOT NULL, actor_name TEXT NOT NULL, amount DOUBLE NOT NULL, payload TEXT NOT NULL)");
         } catch (SQLException exception) {
             throw new IllegalStateException("Failed to initialize database", exception);
@@ -301,9 +505,12 @@ public final class DataManager {
     private void loadAll() {
         loadBlueprints();
         loadAccounts();
+        loadCreatorProfiles();
+        loadCollections();
         loadPurchases();
         loadDisputes();
         loadReviewTickets();
+        loadSocialStates();
         loadLedger();
     }
 
@@ -329,6 +536,28 @@ public final class DataManager {
             }
         } catch (SQLException exception) {
             plugin.getLogger().warning("Failed to load accounts: " + exception.getMessage());
+        }
+    }
+
+    private void loadCreatorProfiles() {
+        creatorProfiles.clear();
+        try (Connection connection = openConnection(); Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT payload FROM creator_profiles")) {
+            while (resultSet.next()) {
+                deserializeCreatorProfile(resultSet.getString("payload")).ifPresent(profile -> creatorProfiles.put(profile.getCreatorId(), profile));
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to load creator profiles: " + exception.getMessage());
+        }
+    }
+
+    private void loadCollections() {
+        collections.clear();
+        try (Connection connection = openConnection(); Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT payload FROM blueprint_collections")) {
+            while (resultSet.next()) {
+                deserializeCollection(resultSet.getString("payload")).ifPresent(collection -> collections.put(normalizeId(collection.getId()), collection));
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to load collections: " + exception.getMessage());
         }
     }
 
@@ -402,6 +631,17 @@ public final class DataManager {
         }
     }
 
+    private void loadSocialStates() {
+        socialStates.clear();
+        try (Connection connection = openConnection(); Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT payload FROM social_states")) {
+            while (resultSet.next()) {
+                deserializeSocialState(resultSet.getString("payload")).ifPresent(state -> socialStates.put(state.getPlayerId(), state));
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to load social states: " + exception.getMessage());
+        }
+    }
+
     private void loadLedger() {
         synchronized (ledgerEntries) {
             ledgerEntries.clear();
@@ -470,6 +710,34 @@ public final class DataManager {
         }
     }
 
+    private void saveCreatorProfileNow(CreatorProfile profile) {
+        String payload = serializeCreatorProfile(profile);
+        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement("REPLACE INTO creator_profiles (creator_uuid, creator_name, updated_at, payload) VALUES (?, ?, ?, ?)") ) {
+            statement.setString(1, profile.getCreatorId().toString());
+            statement.setString(2, profile.getCreatorName());
+            statement.setLong(3, profile.getUpdatedAt());
+            statement.setString(4, payload);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to save creator profile " + profile.getCreatorId() + ": " + exception.getMessage());
+        }
+    }
+
+    private void saveCollectionNow(BlueprintCollection collection) {
+        String payload = serializeCollection(collection);
+        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement("REPLACE INTO blueprint_collections (id, owner_uuid, owner_name, featured, updated_at, payload) VALUES (?, ?, ?, ?, ?, ?)") ) {
+            statement.setString(1, normalizeId(collection.getId()));
+            statement.setString(2, collection.getOwnerId().toString());
+            statement.setString(3, collection.getOwnerName());
+            statement.setInt(4, collection.isFeatured() ? 1 : 0);
+            statement.setLong(5, collection.getUpdatedAt());
+            statement.setString(6, payload);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to save collection " + collection.getId() + ": " + exception.getMessage());
+        }
+    }
+
     private void savePurchaseNow(PurchaseRecord purchaseRecord) {
         try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement("REPLACE INTO purchases (purchase_key, blueprint_id, buyer_uuid, buyer_name, license_type, uses_remaining, total_purchases, total_builds, prepaid_value, first_purchased_at, last_purchase_at, last_build_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
             statement.setString(1, purchaseKey(purchaseRecord.getBlueprintId(), purchaseRecord.getBuyerId()));
@@ -524,6 +792,19 @@ public final class DataManager {
             statement.executeUpdate();
         } catch (SQLException exception) {
             plugin.getLogger().warning("Failed to save review ticket " + ticket.getId() + ": " + exception.getMessage());
+        }
+    }
+
+    private void saveSocialStateNow(SocialState state) {
+        String payload = serializeSocialState(state);
+        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement("REPLACE INTO social_states (player_uuid, player_name, updated_at, payload) VALUES (?, ?, ?, ?)") ) {
+            statement.setString(1, state.getPlayerId().toString());
+            statement.setString(2, state.getPlayerName());
+            statement.setLong(3, state.getUpdatedAt());
+            statement.setString(4, payload);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to save social state " + state.getPlayerId() + ": " + exception.getMessage());
         }
     }
 
@@ -666,6 +947,110 @@ public final class DataManager {
         writeRoyaltyTiers(yaml, listing.getRoyaltyTiers());
         writeTimeline(yaml, listing.getTimeline());
         writeRatings(yaml, listing.getRatingSummary());
+        return yaml.saveToString();
+    }
+
+    private Optional<CreatorProfile> deserializeCreatorProfile(String payload) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        try {
+            yaml.loadFromString(payload);
+            UUID creatorId = UUID.fromString(yaml.getString("creator.uuid", ""));
+            CreatorProfile profile = new CreatorProfile(creatorId, yaml.getString("creator.name", "Unknown"));
+            profile.setHeadline(yaml.getString("headline", "Creator storefront"));
+            profile.setAccentColor(yaml.getString("accent-color", "#38bdf8"));
+            profile.setBio(yaml.getString("bio", ""));
+            profile.setFeaturedBlueprintIds(yaml.getStringList("featured-blueprints"));
+            profile.setPinnedCollectionIds(yaml.getStringList("pinned-collections"));
+            profile.loadUpdatedAt(yaml.getLong("updated-at", System.currentTimeMillis()));
+            return Optional.of(profile);
+        } catch (InvalidConfigurationException | IllegalArgumentException exception) {
+            plugin.getLogger().warning("Failed to parse creator profile payload: " + exception.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private String serializeCreatorProfile(CreatorProfile profile) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("creator.uuid", profile.getCreatorId().toString());
+        yaml.set("creator.name", profile.getCreatorName());
+        yaml.set("headline", profile.getHeadline());
+        yaml.set("accent-color", profile.getAccentColor());
+        yaml.set("bio", profile.getBio());
+        yaml.set("featured-blueprints", profile.getFeaturedBlueprintIds());
+        yaml.set("pinned-collections", profile.getPinnedCollectionIds());
+        yaml.set("updated-at", profile.getUpdatedAt());
+        return yaml.saveToString();
+    }
+
+    private Optional<BlueprintCollection> deserializeCollection(String payload) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        try {
+            yaml.loadFromString(payload);
+            String id = yaml.getString("id", "");
+            if (id.isBlank()) {
+                return Optional.empty();
+            }
+            BlueprintCollection collection = new BlueprintCollection(
+                normalizeId(id),
+                UUID.fromString(yaml.getString("owner.uuid", "")),
+                yaml.getString("owner.name", "Unknown"),
+                yaml.getString("title", id),
+                yaml.getString("description", ""),
+                yaml.getLong("created-at", System.currentTimeMillis())
+            );
+            collection.setFeatured(yaml.getBoolean("featured", false));
+            collection.setBlueprintIds(yaml.getStringList("blueprints"));
+            collection.loadTimestamps(yaml.getLong("created-at", System.currentTimeMillis()), yaml.getLong("updated-at", System.currentTimeMillis()));
+            return Optional.of(collection);
+        } catch (InvalidConfigurationException | IllegalArgumentException exception) {
+            plugin.getLogger().warning("Failed to parse collection payload: " + exception.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private String serializeCollection(BlueprintCollection collection) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("id", collection.getId());
+        yaml.set("owner.uuid", collection.getOwnerId().toString());
+        yaml.set("owner.name", collection.getOwnerName());
+        yaml.set("title", collection.getTitle());
+        yaml.set("description", collection.getDescription());
+        yaml.set("featured", collection.isFeatured());
+        yaml.set("created-at", collection.getCreatedAt());
+        yaml.set("updated-at", collection.getUpdatedAt());
+        yaml.set("blueprints", collection.getBlueprintIds());
+        return yaml.saveToString();
+    }
+
+    private Optional<SocialState> deserializeSocialState(String payload) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        try {
+            yaml.loadFromString(payload);
+            SocialState state = new SocialState(UUID.fromString(yaml.getString("player.uuid", "")), yaml.getString("player.name", "Unknown"));
+            state.setWishlistBlueprintIds(yaml.getStringList("wishlist"));
+            List<UUID> followedCreators = new ArrayList<>();
+            for (String raw : yaml.getStringList("following")) {
+                try {
+                    followedCreators.add(UUID.fromString(raw));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+            state.setFollowedCreators(followedCreators);
+            state.loadUpdatedAt(yaml.getLong("updated-at", System.currentTimeMillis()));
+            return Optional.of(state);
+        } catch (InvalidConfigurationException | IllegalArgumentException exception) {
+            plugin.getLogger().warning("Failed to parse social state payload: " + exception.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private String serializeSocialState(SocialState state) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("player.uuid", state.getPlayerId().toString());
+        yaml.set("player.name", state.getPlayerName());
+        yaml.set("updated-at", state.getUpdatedAt());
+        yaml.set("wishlist", state.getWishlistBlueprintIds());
+        yaml.set("following", state.getFollowedCreators().stream().map(UUID::toString).toList());
         return yaml.saveToString();
     }
 

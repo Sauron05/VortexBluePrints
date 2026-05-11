@@ -4,8 +4,8 @@ plugins {
 }
 
 group = "com.sauron"
-version = "1.0.0"
-description = "Blueprint marketplace plugin with originality detection, theft prevention, and royalties"
+version = "1.1.0"
+description = "Premium blueprint marketplace plugin with storefronts, bundles, social wishlists, originality detection, and royalties"
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
